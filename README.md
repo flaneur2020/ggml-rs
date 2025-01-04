@@ -35,8 +35,8 @@ For more information, you can visit [How to Get GGUF Models](https://github.com/
 | Q8_0 | 8 bits | ✅          | ✅    | ✅    | WIP         | WIP    |
 | Q8_K | 8 bits | ✅          | ✅    | ✅    | WIP         | WIP    |
 | Q6_K | 6 bits | ✅          | WIP  | WIP  | WIP         | WIP    |
-| Q5_0 | 5 bits | ✅          | WIP  | WIP  | WIP         | WIP    |
-| Q5_1 | 5 bits | ✅          | WIP  | WIP  | WIP         | WIP    |
+| Q5_0 | 5 bits | ✅          | ✅    | ✅    | WIP         | WIP    |
+| Q5_1 | 5 bits | ✅          | ✅    | ✅    | WIP         | WIP    |
 | Q5_K | 5 bits | ✅          | WIP  | WIP  | WIP         | WIP    |
 | Q4_0 | 4 bits | ✅          | ✅    | ✅    | WIP         | WIP    |
 | Q4_1 | 4 bits | ✅          | ✅    | ✅    | WIP         | WIP    |

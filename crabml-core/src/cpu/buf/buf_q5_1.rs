@@ -140,6 +140,129 @@ pub fn quantize_f32_q5_1(data: &[f32]) -> Vec<BlockQ5_1> {
 }
 
 pub fn vec_dot_q5_1_q8_1(abs: &[BlockQ5_1], bbs: &[BlockQ8_1]) -> f32 {
+    #[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
+    {
+        vec_dot_q5_1_q8_1_neon(abs, bbs)
+    }
+
+    #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
+    {
+        vec_dot_q5_1_q8_1_avx2(abs, bbs)
+    }
+
+    #[cfg(not(any(
+        all(target_arch = "aarch64", target_feature = "neon"),
+        all(target_arch = "x86_64", target_feature = "avx2")
+    )))]
+    vec_dot_q5_1_q8_1_fallback(abs, bbs)
+}
+
+#[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
+pub fn vec_dot_q5_1_q8_1_neon(abs: &[BlockQ5_1], bbs: &[BlockQ8_1]) -> f32 {
+    use std::arch::aarch64::*;
+
+    let mut sumf: f32 = 0.0;
+    unsafe {
+        for i in 0..bbs.len() {
+            let qh: u32 = LittleEndian::read_u32(&abs[i].qh);
+            let mut sumi = vdupq_n_s32(0);
+
+            for j in (0..16).step_by(8) {
+                // Load Q5_1 quantized values
+                let q5_1 = vld1_u8(abs[i].qs[j..].as_ptr());
+                let q5_1_low = vmovl_u8(q5_1);
+                let q5_1_high = vmovl_high_u8(vld1q_u8(abs[i].qs[j..].as_ptr()));
+
+                // Extract high bits from qh
+                let qh_low = vdupq_n_u16(((qh >> j) & 0xFF) as u16);
+                let qh_high = vdupq_n_u16(((qh >> (j + 8)) & 0xFF) as u16);
+
+                // Combine low and high bits
+                let q5_1_low = vorrq_u16(q5_1_low, vshlq_n_u16(qh_low, 4));
+                let q5_1_high = vorrq_u16(q5_1_high, vshlq_n_u16(qh_high, 4));
+
+                // Load Q8_1 values
+                let q8_1_low = vld1q_s8(bbs[i].qs[j..].as_ptr());
+                let q8_1_high = vld1q_s8(bbs[i].qs[j + 16..].as_ptr());
+
+                // Multiply and accumulate
+                let prod_low = vmull_s16(
+                    vget_low_s16(vreinterpretq_s16_u16(q5_1_low)),
+                    vget_low_s16(vreinterpretq_s16_s8(q8_1_low)),
+                );
+                let prod_high = vmull_s16(
+                    vget_low_s16(vreinterpretq_s16_u16(q5_1_high)),
+                    vget_low_s16(vreinterpretq_s16_s8(q8_1_high)),
+                );
+
+                sumi = vaddq_s32(sumi, vaddq_s32(prod_low, prod_high));
+            }
+
+            // Horizontal sum
+            let tmp = vpadd_s32(vget_low_s32(sumi), vget_high_s32(sumi));
+            let sum = vget_lane_s32(tmp, 0) + vget_lane_s32(tmp, 1);
+
+            sumf += sum as f32 * (abs[i].d * bbs[i].d).to_f32() + (abs[i].m * bbs[i].s).to_f32();
+        }
+    }
+    sumf
+}
+
+#[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
+pub fn vec_dot_q5_1_q8_1_avx2(abs: &[BlockQ5_1], bbs: &[BlockQ8_1]) -> f32 {
+    use std::arch::x86_64::*;
+    let mut sumf: f32 = 0.0;
+
+    unsafe {
+        for i in 0..abs.len() {
+            let qh: u32 = LittleEndian::read_u32(&abs[i].qh);
+            let mut sumi = _mm256_setzero_si256();
+
+            for j in (0..16).step_by(8) {
+                // Load Q5_1 quantized values
+                let q5_1 = _mm_loadu_si128(abs[i].qs[j..].as_ptr() as *const __m128i);
+                let q5_1_low = _mm256_cvtepu8_epi16(q5_1);
+                let q5_1_high = _mm256_cvtepu8_epi16(_mm_srli_si128(q5_1, 8));
+
+                // Extract high bits from qh
+                let qh_low = _mm256_set1_epi16(((qh >> j) & 0xFF) as i16);
+                let qh_high = _mm256_set1_epi16(((qh >> (j + 8)) & 0xFF) as i16);
+
+                // Combine low and high bits
+                let q5_1_low = _mm256_or_si256(q5_1_low, _mm256_slli_epi16(qh_low, 4));
+                let q5_1_high = _mm256_or_si256(q5_1_high, _mm256_slli_epi16(qh_high, 4));
+
+                // Load Q8_1 quantized values
+                let q8_1_low = _mm256_loadu_si256(bbs[i].qs[j..].as_ptr() as *const __m256i);
+                let q8_1_high = _mm256_loadu_si256(bbs[i].qs[j + 16..].as_ptr() as *const __m256i);
+
+                // Multiply Q5_1 and Q8_1 values
+                let prod_low = _mm256_madd_epi16(q5_1_low, q8_1_low);
+                let prod_high = _mm256_madd_epi16(q5_1_high, q8_1_high);
+
+                // Accumulate the results
+                sumi = _mm256_add_epi32(sumi, _mm256_add_epi32(prod_low, prod_high));
+            }
+
+            // Horizontal sum of the 256-bit register
+            let sumi = _mm256_extract_epi32(sumi, 0)
+                + _mm256_extract_epi32(sumi, 1)
+                + _mm256_extract_epi32(sumi, 2)
+                + _mm256_extract_epi32(sumi, 3)
+                + _mm256_extract_epi32(sumi, 4)
+                + _mm256_extract_epi32(sumi, 5)
+                + _mm256_extract_epi32(sumi, 6)
+                + _mm256_extract_epi32(sumi, 7);
+
+            // Add the final result to sumf
+            sumf += sumi as f32 * (abs[i].d * bbs[i].d).to_f32() + (abs[i].m * bbs[i].s).to_f32();
+        }
+    }
+
+    sumf
+}
+
+pub fn vec_dot_q5_1_q8_1_fallback(abs: &[BlockQ5_1], bbs: &[BlockQ8_1]) -> f32 {
     let mut sumf = 0f32;
 
     for i in 0..abs.len() {
