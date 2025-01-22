@@ -39,19 +39,19 @@ pub fn quantize_f32_f16<'a>(buf: &[f32]) -> Cow<'a, [f16]> {
 }
 
 pub fn vec_dot_f16_f16(a: &[f16], a_offset: usize, b: &[f16], b_offset: usize, len: usize) -> f32 {
-    #[cfg(target_arch = "aarch64")]
+    #[cfg(all(target_arch = "aarch64", target_feature = "fp16"))]
     {
-        vec_dot_f16_f16_simd(a, a_offset, b, b_offset, len)
+        vec_dot_f16_f16_neon(a, a_offset, b, b_offset, len)
     }
 
-    #[cfg(not(any(target_arch = "aarch64",)))]
+    #[cfg(not(any(target_arch = "aarch64", target_feature = "fp16")))]
     {
         vec_dot_f16_f16_fallback(a, a_offset, b, b_offset, len)
     }
 }
 
 #[cfg(target_arch = "aarch64")]
-pub fn vec_dot_f16_f16_simd(
+pub fn vec_dot_f16_f16_neon(
     a: &[f16],
     a_offset: usize,
     b: &[f16],
@@ -105,7 +105,7 @@ pub fn vec_dot_f16_f16_strided(
 ) -> f32 {
     #[cfg(target_arch = "aarch64")]
     {
-        vec_dot_f16_f16_strided_simd(a, a_base, a_stride, k, b)
+        vec_dot_f16_f16_strided_neon(a, a_base, a_stride, k, b)
     }
 
     #[cfg(not(any(target_arch = "aarch64",)))]
@@ -190,7 +190,7 @@ pub fn vec_convert_f16_f32_neon(dst: &mut [f16], src: &[f32]) {
 }
 
 #[cfg(target_arch = "aarch64")]
-pub fn vec_dot_f16_f16_strided_simd(
+pub fn vec_dot_f16_f16_strided_neon(
     a: &[f16],
     a_base: usize,
     a_stride: usize,
